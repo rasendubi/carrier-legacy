@@ -60,7 +60,7 @@ struct EndpointWorker {
 }
 
 impl Endpoint {
-    pub(crate) fn spawn(stdsock: StdSocket, miosock: UdpSocket) -> Result<Self, Error> {
+    pub fn spawn(stdsock: StdSocket, miosock: UdpSocket) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel(10);
         let worker = EndpointWorker {
             work:     rx,

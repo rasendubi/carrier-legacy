@@ -24,17 +24,12 @@ extern crate hpack;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate futurize;
 extern crate toml;
 extern crate trust_dns_resolver;
-#[macro_use]
-extern crate futurize_derive;
-extern crate gcmap;
 extern crate interfaces2 as interfaces;
 extern crate dirs;
 extern crate fs2;
 
-mod ptrmap;
 pub mod channel;
 pub mod clock;
 pub mod config;
@@ -42,12 +37,9 @@ pub mod connect;
 pub mod dns;
 pub mod endpoint;
 pub mod keystore;
-pub mod listener;
 pub mod local_addrs;
 pub mod publisher;
-pub mod shadow;
 pub mod subscriber;
-pub mod xlog;
 
 pub use carrier_core::*;
 pub use identity::Identity;

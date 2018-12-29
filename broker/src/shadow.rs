@@ -1,5 +1,5 @@
-use channel;
-use endpoint;
+use carrier::channel;
+use carrier::endpoint;
 use failure::Error;
 use futures::sync::mpsc;
 use futures::{self, Future, Sink, Stream};

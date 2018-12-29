@@ -1,4 +1,4 @@
-use identity::Identity;
+use carrier::identity::Identity;
 use std::collections::HashMap;
 use std::sync::Mutex;
 

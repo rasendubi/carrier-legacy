@@ -6,11 +6,22 @@ extern crate rand;
 #[macro_use]
 extern crate log;
 extern crate tokio;
+extern crate futurize;
+#[macro_use]
+extern crate futurize_derive;
+extern crate gcmap;
+#[macro_use]
+extern crate lazy_static;
 
 use carrier::*;
 use failure::Error;
 use futures::{Future, Stream};
 use std::env;
+
+mod ptrmap;
+mod shadow;
+mod listener;
+mod xlog;
 
 pub fn main() {
     if let Err(_) = env::var("RUST_LOG") {

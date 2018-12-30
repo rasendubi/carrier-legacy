@@ -11,12 +11,12 @@ use identity;
 use local_addrs;
 use noise;
 use packet;
-use prost::Message;
 use proto;
 use std::net::SocketAddr;
 use std::net::UdpSocket as StdSocket;
 use tokio;
 use transport;
+use stats;
 
 pub struct PublisherService {
     sock:       StdSocket,
@@ -137,7 +137,7 @@ impl proto::Peer::Service for PublisherService {
         let (tx, rx) = mpsc::channel(10);
         let ft = self.ep.work.clone().send(endpoint::EndpointWorkerCmd::InsertChannel(
             msg.route,
-            endpoint::ChannelBus::User { inc: tx },
+            endpoint::ChannelBus::User { inc: tx, tc: stats::PacketCounter::default() },
         ));
 
         let selfidentity = self.secret.identity();

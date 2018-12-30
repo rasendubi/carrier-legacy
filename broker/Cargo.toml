@@ -19,6 +19,7 @@ futurize            = "0.5.0"
 futurize-derive     = "0.5.0"
 gcmap               = "0.1.4"
 lazy_static         = "1.2.0"
+dotenv              = "0.13.0"
 
 [dependencies.env_logger]
 version = "0.5.12"

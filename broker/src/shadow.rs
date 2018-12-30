@@ -2,6 +2,7 @@ use carrier::channel;
 use carrier::endpoint;
 use failure::Error;
 use futures::sync::mpsc;
+use futures::sync::oneshot;
 use futures::{self, Future, Sink, Stream};
 use futurize;
 use gcmap::{HashMap, MarkOnDrop};
@@ -12,6 +13,8 @@ use ptrmap;
 use std::net::SocketAddr;
 use tokio;
 use xlog;
+use stats;
+use std::collections::HashSet;
 
 macro_rules! wrk_try {
     ($self:ident, $x:expr) => {
@@ -288,6 +291,7 @@ impl Broker {
 }
 
 impl broker::Worker for Broker {
+
     fn subscribe(
         mut self,
         identity: identity::Identity,
@@ -397,11 +401,13 @@ impl peer::Worker for Peer {
 }
 
 struct Srv {
-    endpoint: endpoint::Endpoint,
-    broker:   broker::Handle,
-    identity: identity::Identity,
-    worker:   peer::Handle,
-    ipaddr:   SocketAddr,
+    endpoint:       endpoint::Endpoint,
+    broker:         broker::Handle,
+    identity:       identity::Identity,
+    worker:         peer::Handle,
+    ipaddr:         SocketAddr,
+    coordinators:   HashSet<identity::Identity>,
+    epoch:          u64,
 }
 
 impl broker::Handle {
@@ -410,6 +416,7 @@ impl broker::Handle {
         endpoint: endpoint::Endpoint,
         mut channel: channel::Channel,
         ipaddr: SocketAddr,
+        coordinators: HashSet<identity::Identity>,
     ) -> impl Future<Item = (), Error = Error> {
         let lst = channel.listener().unwrap();
         let identity = channel.identity().clone();
@@ -429,12 +436,56 @@ impl broker::Handle {
             worker: handle,
             endpoint,
             ipaddr,
+            coordinators,
+            epoch: 0,
         };
         proto::Broker::dispatch(lst, srv)
     }
 }
 
 impl proto::Broker::Service for Srv {
+    fn epochsync(
+        &mut self,
+        _headers: Headers,
+        msg: proto::EpochSyncRequest,
+    ) -> Result<Box<Future<Item = proto::EpochSyncResponse, Error = Error> + Sync + Send + 'static>, Error> {
+
+        // check if the sender is a trusted coordinator
+        if !self.coordinators.contains(&self.identity) {
+            return Ok(Box::new(futures::future::ok(proto::EpochSyncResponse::default())));
+        }
+
+
+        info!("epoch sync from {} to {} by coordinator {}",
+              self.epoch, msg.epoch, self.identity);
+
+        let clear = {
+            if self.epoch != msg.epoch {
+                self.epoch = msg.epoch;
+                true
+            } else {
+                false
+            }
+        };
+
+
+        let (r_tx, r_rx) = oneshot::channel();
+        let ft = self
+            .endpoint.work.clone().send(endpoint::EndpointWorkerCmd::DumpStats(r_tx, clear))
+            .map_err(Error::from)
+            .and_then(move |_| {
+                r_rx
+                    .map_err(Error::from)
+                    .and_then(|dump|{
+                        Ok(proto::EpochSyncResponse{
+                            dump: Some(dump),
+                        })
+                    })
+            });
+
+        Ok(Box::new(ft))
+    }
+
     fn subscribe(
         &mut self,
         _headers: Headers,
@@ -500,15 +551,22 @@ impl proto::Broker::Service for Srv {
 
         let selfipaddr = self.ipaddr.clone();
         let selfidentity = self.identity.as_bytes().to_vec();
+        let selfidentity_ = self.identity.clone();
         let mut endpoint = self.endpoint.clone();
 
         let mut broker = self.broker.clone();
         let ft = futures::future::result(identity::Identity::from_bytes(msgidentity))
             .and_then(move |target| {
+                let tc = stats::PacketCounter{
+                    initiator: Some(selfidentity_),
+                    responder: Some(target.clone()),
+                    ..stats::PacketCounter::default()
+                };
                 broker.get_peer(target).and_then(move |maybe| {
                     if let Some((mut peer, ipaddr)) = maybe {
+
                         let ft = endpoint
-                            .proxy(selfipaddr, ipaddr)
+                            .proxy(selfipaddr, ipaddr, tc)
                             .and_then(move |proxy| {
                                 peer.connect(proto::PeerConnectRequest {
                                     identity:  selfidentity,

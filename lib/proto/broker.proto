@@ -71,11 +71,36 @@ message ConnectResponse {
     repeated Path paths     = 4;
 }
 
+
+message EpochSyncRequest {
+    uint64 epoch = 1;
+}
+
+
+
+message EpochDumpPacketCounter {
+    bytes   identity    = 1;
+    uint64  dcs         = 2;
+    uint64  bx          = 3;
+    uint64  tx          = 4;
+    uint64  rx          = 5;
+}
+
+message EpochDump {
+    repeated EpochDumpPacketCounter packets = 1;
+}
+
+
+message EpochSyncResponse {
+    EpochDump dump = 1;
+}
+
 service Broker {
     rpc subscribe   (SubscribeRequest)  returns (stream SubscribeChange) {}
     rpc publish     (PublishRequest)    returns (stream PublishChange)   {}
-
     rpc connect     (ConnectRequest)    returns (stream ConnectResponse) {}
+
+    rpc epochsync   (EpochSyncRequest)   returns (EpochSyncResponse)     {}
 }
 
 message PeerConnectRequest {

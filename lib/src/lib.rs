@@ -40,6 +40,7 @@ pub mod keystore;
 pub mod local_addrs;
 pub mod publisher;
 pub mod subscriber;
+pub mod stats;
 
 pub use carrier_core::*;
 pub use identity::Identity;

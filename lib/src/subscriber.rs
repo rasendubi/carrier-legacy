@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use std::net::UdpSocket as StdSocket;
 use transport;
 use clock;
+use stats;
 
 
 #[derive(Debug, Fail)]
@@ -82,7 +83,7 @@ pub fn connect(
             let (tx, rx) = mpsc::channel(10);
             let ft = ep.clone().send(endpoint::EndpointWorkerCmd::InsertChannel(
                 msg.route,
-                endpoint::ChannelBus::User { inc: tx },
+                endpoint::ChannelBus::User { inc: tx, tc: stats::PacketCounter::default() },
             ));
 
             let mut paths = Vec::new();

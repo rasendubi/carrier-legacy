@@ -93,6 +93,11 @@ pub fn main_() -> Result<(), Error> {
 
         .subcommand(SubCommand::with_name("mkshadow").about("create a shadow address"))
         .subcommand(
+            SubCommand::with_name("sync")
+                .about("coordinate a broker epoch")
+                .arg(Arg::with_name("broker").takes_value(true).required(true).index(1))
+                .arg(Arg::with_name("epoch").takes_value(true).required(true).index(2))
+        ).subcommand(
             SubCommand::with_name("dns")
                 .about("create dns record")
                 .arg(Arg::with_name("priority").takes_value(true).required(true).index(2))
@@ -449,6 +454,16 @@ pub fn main_() -> Result<(), Error> {
             }
             Ok(())
         }
+        ("sync", Some(submatches)) => {
+            let secrets = keystore::Secrets::load()?;
+            let broker: std::net::IpAddr = submatches.value_of("broker").unwrap().to_string().parse().expect("broker ip");
+            let epoch: u64 = submatches.value_of("epoch").unwrap().to_string().parse().expect("epoch");
+
+            tokio::run(futures::lazy(move || {
+                sync(secrets.identity, broker, epoch).map_err(|e| error!("{}", e))
+            }));
+            Ok(())
+        }
         _ => unreachable!(),
     }
 }
@@ -667,4 +682,28 @@ pub fn update(
 }
 
 
+pub fn sync(
+    secret: identity::Secret,
+    broker: std::net::IpAddr,
+    epoch:  u64,
+) -> impl Future<Item = (), Error = Error> {
+    let domain = env::var("CARRIER_BROKER_DOMAIN").unwrap_or("2.carrier.devguard.io".to_string());
+    connect::connect_to_ip(domain, broker, secret.clone()).and_then(move |(_ep, mut brk, _sock, _addr)| {
+        brk.message("/carrier.broker.v1/broker/epochsync")
+            .unwrap()
+            .send(proto::EpochSyncRequest{
+                epoch,
+            }).flatten_stream()
+        .for_each(move |m: proto::EpochSyncResponse| {
+            if let Some(dump) = m.dump {
+                println!("{:#?}", dump);
+            }
+            Ok(())
+        })
+        .and_then(|_| {
+            drop(brk);
+            Ok(())
+        })
+    })
+}
 

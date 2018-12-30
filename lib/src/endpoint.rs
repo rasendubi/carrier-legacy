@@ -11,6 +11,10 @@ use std::net::UdpSocket as StdSocket;
 use tokio;
 use tokio::net::UdpSocket;
 use transport::MAX_PACKET_SIZE;
+use stats;
+use tokio::timer::Interval;
+use std::time::{Instant,Duration};
+use proto;
 
 #[derive(Debug, Fail)]
 pub enum EndpointError {
@@ -28,6 +32,7 @@ pub enum EndpointWorkerCmd {
     RemoveChannel(RoutingKey),
     AquireChannel(oneshot::Sender<(RoutingKey)>, ChannelBus),
     InsertChannel(RoutingKey, ChannelBus),
+    DumpStats(oneshot::Sender<proto::EpochDump>, bool),
 }
 
 #[derive(Clone)]
@@ -37,11 +42,13 @@ pub struct Endpoint {
 
 pub enum ChannelBus {
     User {
-        inc: mpsc::Sender<(EncryptedPacket, SocketAddr)>,
+        inc:    mpsc::Sender<(EncryptedPacket, SocketAddr)>,
+        tc:     stats::PacketCounter,
     },
     Proxy {
-        initiator: SocketAddr,
-        responder: SocketAddr,
+        initiator:  SocketAddr,
+        responder:  SocketAddr,
+        tc:         stats::PacketCounter,
     },
 }
 
@@ -53,6 +60,9 @@ pub struct Proxy {
 struct EndpointWorker {
     work: mpsc::Receiver<EndpointWorkerCmd>,
 
+    stats:  stats::Stats,
+    sync:   Interval,
+
     stdsock: StdSocket,
     sock:    UdpSocket,
 
@@ -63,17 +73,19 @@ impl Endpoint {
     pub fn spawn(stdsock: StdSocket, miosock: UdpSocket) -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel(10);
         let worker = EndpointWorker {
-            work:     rx,
-            stdsock:  stdsock,
-            sock:     miosock,
-            channels: HashMap::new(),
+            work:       rx,
+            sync:       Interval::new(Instant::now(), Duration::from_secs(10)),
+            stats:      stats::Stats::default(),
+            stdsock:    stdsock,
+            sock:       miosock,
+            channels:   HashMap::new(),
         };
         tokio::spawn(worker);
         Ok(Endpoint { work: tx })
     }
 
-    pub fn proxy(&mut self, initiator: SocketAddr, responder: SocketAddr) -> impl Future<Item = Proxy, Error = Error> {
-        let bus = ChannelBus::Proxy { initiator, responder };
+    pub fn proxy(&mut self, initiator: SocketAddr, responder: SocketAddr, tc: stats::PacketCounter) -> impl Future<Item = Proxy, Error = Error> {
+        let bus = ChannelBus::Proxy { initiator, responder, tc };
 
         let (route_tx, route_rx) = oneshot::channel();
         let work = self.work.clone();
@@ -109,6 +121,35 @@ impl Future for EndpointWorker {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         trace!("EndpointWorker muxing for {} channels", self.channels.len());
 
+
+        // sync stats
+        if let Async::Ready(_) = self.sync.poll().expect("poll ep sync timer") {
+            for (_,v) in &mut self.channels {
+                match v {
+                    ChannelBus::User {tc, .. } => {
+                        if let Some(ref i) = tc.initiator {
+                            self.stats.traffic(i.clone(), 0,0, tc.tx + tc.rx, false);
+                        }
+                        if let Some(ref i) = tc.responder {
+                            self.stats.traffic(i.clone(), 0,0, tc.tx + tc.rx, false);
+                        }
+                        tc.tx = 0;
+                        tc.rx = 0;
+                    }
+                    ChannelBus::Proxy{tc,..} => {
+                        if let Some(ref i) = tc.initiator {
+                            self.stats.traffic(i.clone(), tc.tx, tc.rx,0, false);
+                        }
+                        if let Some(ref i) = tc.responder {
+                            self.stats.traffic(i.clone(), tc.rx, tc.tx,0, false);
+                        }
+                        tc.tx = 0;
+                        tc.rx = 0;
+                    }
+                }
+            }
+        }
+
         // sync with main thread
         loop {
             match self.work.poll()? {
@@ -117,7 +158,25 @@ impl Future for EndpointWorker {
                     return Ok(Async::Ready(()));
                 }
                 Async::Ready(Some(EndpointWorkerCmd::RemoveChannel(route))) => {
-                    self.channels.remove(&route);
+                    match self.channels.remove(&route) {
+                        Some(ChannelBus::User {tc, .. }) => {
+                            if let Some(i) = tc.initiator {
+                                self.stats.traffic(i, 0,0, tc.tx + tc.rx, true);
+                            }
+                            if let Some(i) = tc.responder {
+                                self.stats.traffic(i, 0,0, tc.tx + tc.rx, true);
+                            }
+                        }
+                        Some(ChannelBus::Proxy{tc,..}) => {
+                            if let Some(i) = tc.initiator {
+                                self.stats.traffic(i, tc.tx, tc.rx,0, true);
+                            }
+                            if let Some(i) = tc.responder {
+                                self.stats.traffic(i, tc.rx, tc.tx,0, true);
+                            }
+                        }
+                        _ => (),
+                    }
                 }
                 Async::Ready(Some(EndpointWorkerCmd::InsertChannel(route, bus))) => {
                     self.channels.insert(route, bus);
@@ -133,6 +192,10 @@ impl Future for EndpointWorker {
                     }
                     self.channels.insert(key, bus);
                     giveroute.send(key).ok();
+                }
+                Async::Ready(Some(EndpointWorkerCmd::DumpStats(ret, clear))) => {
+                    let r = self.stats.dump(clear);
+                    ret.send(r).ok();
                 }
                 Async::NotReady => break,
             };
@@ -164,14 +227,17 @@ impl EndpointWorker {
         let pkt = EncryptedPacket::decode(b)?;
         if let Some(channel) = self.channels.get_mut(&pkt.route) {
             match channel {
-                ChannelBus::User { inc } => {
+                ChannelBus::User { inc, tc } => {
+                    tc.rx += 1;
                     inc.try_send((pkt, addr))?;
                 }
-                ChannelBus::Proxy { initiator, responder } => {
+                ChannelBus::Proxy { initiator, responder, tc } => {
                     assert_ne!(pkt.route, 0);
                     let to = if pkt.direction == RoutingDirection::Initiator2Responder {
+                        tc.tx += 1;
                         responder
                     } else {
+                        tc.rx += 1;
                         initiator
                     };
                     if addr == *to {
@@ -183,6 +249,7 @@ impl EndpointWorker {
             }
             Ok(())
         } else {
+            //TODO count this as well
             Err(EndpointError::UnknownChannel { route: pkt.route }.into())
         }
     }

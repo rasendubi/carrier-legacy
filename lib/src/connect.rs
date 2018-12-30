@@ -20,6 +20,7 @@ use tokio::net::UdpSocket;
 use tokio::timer::Delay;
 use transport;
 use clock;
+use stats;
 
 #[derive(Debug, Fail)]
 pub enum ConnectError {
@@ -32,6 +33,19 @@ pub fn connect<S: AsRef<str>>(
     secret: identity::Secret,
 ) -> impl Future<Item = (Endpoint, Channel, StdSocket, SocketAddr), Error = Error> {
     dns::resolve(domain.as_ref()).and_then(|(epoch, records)| EndpointFuture::new(secret, records))
+}
+
+pub fn connect_to_ip<S: AsRef<str>>(
+    domain: S,
+    ip: std::net::IpAddr,
+    secret: identity::Secret,
+) -> impl Future<Item = (Endpoint, Channel, StdSocket, SocketAddr), Error = Error> {
+    dns::resolve(domain.as_ref()).and_then(move |(epoch, mut records)|{
+        records.retain(move |ref record| {
+            record.addr.ip() == ip
+        });
+        EndpointFuture::new(secret, records)
+    })
 }
 
 struct EndpointFuture {
@@ -150,7 +164,7 @@ impl Future for EndpointFuture {
 
                         ep.work.try_send(endpoint::EndpointWorkerCmd::InsertChannel(
                             route,
-                            endpoint::ChannelBus::User { inc: tx },
+                            endpoint::ChannelBus::User { inc: tx, tc: stats::PacketCounter::default() },
                         ))?;
 
                         let transport = transport::Channel::new(noise, format!("<{}:{}", addr, identity));

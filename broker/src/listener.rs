@@ -18,6 +18,7 @@ use tokio;
 use tokio::net::UdpSocket;
 use carrier::transport;
 use xlog;
+use stats;
 
 pub struct Listener {
     ep:      endpoint::Endpoint,
@@ -45,7 +46,7 @@ pub fn listen(secret: identity::Secret) -> Result<(Listener, shadow::broker::Han
     let mut work = ep.work.clone();
     work.try_send(endpoint::EndpointWorkerCmd::InsertChannel(
         0,
-        endpoint::ChannelBus::User { inc: tx },
+        endpoint::ChannelBus::User { inc: tx, tc: stats::PacketCounter::default() },
     ))?;
 
     Ok((
@@ -115,7 +116,11 @@ impl ChannelHandshake {
 
     pub fn accept(self, secret: identity::Secret) -> impl Future<Item = channel::Channel, Error = Error> {
         let (tx, rx) = mpsc::channel(100);
-        let bus = endpoint::ChannelBus::User { inc: tx };
+        let tc = stats::PacketCounter{
+            initiator: Some(self.identity.clone()),
+            ..stats::PacketCounter::default()
+        };
+        let bus = endpoint::ChannelBus::User { inc: tx, tc };
 
         let (route_tx, route_rx) = oneshot::channel();
 

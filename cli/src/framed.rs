@@ -11,7 +11,7 @@ where T: AsyncRead
     type Item  = Bytes;
     type Error = Error;
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let mut buf = vec![0;1024];
+        let mut buf = vec![0;800];
         match self.0.poll_read(&mut buf)? {
             Async::Ready(len) if len == 0 => {
                 Ok(Async::Ready(None))

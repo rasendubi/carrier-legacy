@@ -191,7 +191,7 @@ where S1: Write + AsyncRead,
     type Error = Error;
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
-            let mut buf = vec![0; 1024];
+            let mut buf = vec![0; 800];
             buf[0] = 1;
             match self.s1.poll_read(&mut buf[1..]) {
                 Err(e) => return Err(Error::from(e)),
@@ -207,7 +207,7 @@ where S1: Write + AsyncRead,
         }
 
         loop {
-            let mut buf = vec![0; 1024];
+            let mut buf = vec![0; 800];
             match self.s2.poll_read(&mut buf) {
                 Err(e) => return Err(Error::from(e)),
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
@@ -242,7 +242,7 @@ where W: Write,
     type Error = Error;
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         loop {
-            let mut buf = vec![0;1024];
+            let mut buf = vec![0;800];
             buf[0] = 1;
             match self.r.poll_read(&mut buf[1..]) {
                 Err(e) => return Err(Error::from(e)),

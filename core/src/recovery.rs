@@ -208,7 +208,7 @@ impl QuicRecovery {
         };
 
         assert!(
-            self.largest_sent_packet < seq
+            self.largest_sent_packet < seq,
             "cannot send packet older than last one"
         );
         self.largest_sent_packet = seq;
